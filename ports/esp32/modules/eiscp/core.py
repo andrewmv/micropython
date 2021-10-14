@@ -7,7 +7,7 @@ try:
     import queue as queue
 except ImportError:
     import Queue as queue
-import netifaces
+import network
 from collections import namedtuple
 
 from . import commands
@@ -312,39 +312,35 @@ class eISCP(object):
         # unique identifier code
         found_receivers = {}
 
-        # We do this on all network interfaces
-        # which have an AF_INET address and broadcast address
-        for interface in netifaces.interfaces():
-            ifaddrs=netifaces.ifaddresses(interface)
-            if not netifaces.AF_INET in ifaddrs:
-                continue
-            for ifaddr in ifaddrs[netifaces.AF_INET]:
-                if not "addr" in ifaddr or not "broadcast" in ifaddr:
-                    continue
-                # Broadcast magic
-                sock = socket.socket(
-                    socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-                sock.setblocking(0)   # So we can use select()
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                sock.bind((ifaddr["addr"], 0))
-                sock.sendto(onkyo_magic, (ifaddr["broadcast"], eISCP.ONKYO_PORT))
-                sock.sendto(pioneer_magic, (ifaddr["broadcast"], eISCP.ONKYO_PORT))
-        
-                while True:
-                    ready = select.select([sock], [], [], timeout)
-                    if not ready[0]:
-                        break
-                    data, addr = sock.recvfrom(1024)
+        # uPython-specific network code
+        interface = network.WLAN(network.STA_IF)
+        ifaddr = interface.ifconfig()[0]
+        ifbroadcast = interface.ifconfig()[1]
 
-                    info = parse_info(data)
-        
-                    # Give the user a ready-made receiver instance. It will only
-                    # connect on demand, when actually used.
-                    receiver = (clazz or eISCP)(addr[0], int(info['iscp_port']))
-                    receiver.info = info
-                    found_receivers[info["identifier"]]=receiver
-        
-                sock.close()
+        # Broadcast magic
+        sock = socket.socket(
+            socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        sock.setblocking(0)   # So we can use select()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind((ifaddr, 0))
+        sock.sendto(onkyo_magic, (ifbroadcast, eISCP.ONKYO_PORT))
+        sock.sendto(pioneer_magic, (ifbroadcast, eISCP.ONKYO_PORT))
+
+        while True:
+            ready = select.select([sock], [], [], timeout)
+            if not ready[0]:
+                break
+            data, addr = sock.recvfrom(1024)
+
+            info = parse_info(data)
+
+            # Give the user a ready-made receiver instance. It will only
+            # connect on demand, when actually used.
+            receiver = (clazz or eISCP)(addr[0], int(info['iscp_port']))
+            receiver.info = info
+            found_receivers[info["identifier"]]=receiver
+
+        sock.close()
         return list(found_receivers.values())
 
     def __init__(self, host, port=60128):
